@@ -1,0 +1,275 @@
+// Prisma Schema for Print Shop Management System MVP
+// Generated strictly from STEP2_MVP_DDL_FINAL_CANDIDATE.sql
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// 1. ENUMS (Exact match to DDL section 1)
+// ============================================================================
+
+enum quotation_status {
+  Pending
+  Completed
+  Rejected
+  Under_Revision
+}
+
+enum prototype_status {
+  Not_Started
+  In_Progress
+  Pending
+  Completed
+  Under_Revision
+}
+
+enum print_job_status {
+  In_Design
+  In_Production
+  QC_Pending
+  Completed
+}
+
+enum delivery_status {
+  Producing
+  Preparing
+  Shipping
+  Delivered
+}
+
+enum sales_order_status {
+  Quotation_Not_Started
+  Quotation_Pending
+  Quotation_Completed
+  Quotation_Rejected
+  Quotation_Under_Revision
+  Prototype_Not_Started
+  Prototype_In_Progress
+  Prototype_Pending
+  Prototype_Completed
+  Prototype_Under_Revision
+  Print_Job_In_Production
+  Print_Job_QC_Pending
+  Print_Job_Completed
+  Delivery_Preparing
+  Delivery_Shipping
+  Delivery_Delivered
+}
+
+// ============================================================================
+// 2. CORE OPERATIONAL ENTITIES (11 Tables)
+// ============================================================================
+
+model Customer {
+  Customer_ID      String       @id @db.VarChar(8)
+  Customer_Name    String       @db.VarChar(100)
+  Customer_Address String       @db.Text
+  Customer_Phone   String       @db.VarChar(20)
+  salesOrders      SalesOrder[]
+
+  @@map("CUSTOMER")
+}
+
+model SalesOrder {
+  Sales_Order_ID   String             @id @db.VarChar(8)
+  Order_Date       DateTime           @default(now()) @db.Date
+  Total_Amount     Decimal            @default(0.00) @db.Decimal(12, 2)
+  Order_Status     sales_order_status @default(Quotation_Not_Started)
+  Customer_ID      String             @db.VarChar(8)
+  customer         Customer           @relation(fields: [Customer_ID], references: [Customer_ID], onDelete: Restrict)
+  orderDetails     OrderDetail[]
+  quotation        Quotation?
+  delivery         Delivery?
+  receipt          Receipt?
+  uc11Logs         UC11IdempotencyLog[]
+  uc12Logs         UC12IdempotencyLog[]
+  uc13Logs         UC13IdempotencyLog[]
+
+  @@map("SALES_ORDER")
+}
+
+model OrderDetail {
+  Product_ID      String           @id @db.VarChar(8)
+  Sales_Order_ID  String           @db.VarChar(8)
+  Product_Name    String           @db.VarChar(100)
+  Quantity        Int
+  Product_Format  String           @db.VarChar(50)
+  salesOrder      SalesOrder       @relation(fields: [Sales_Order_ID], references: [Sales_Order_ID], onDelete: Restrict)
+  quotationDetail QuotationDetail?
+  printJob        PrintJob?
+
+  @@unique([Product_ID, Sales_Order_ID])
+  @@map("ORDER_DETAIL")
+}
+
+model Quotation {
+  Quotation_ID     String            @id @db.VarChar(8)
+  Sales_Order_ID   String            @unique @db.VarChar(8)
+  Quotation_Date   DateTime          @default(now()) @db.Date
+  Total_Amount     Decimal           @default(0.00) @db.Decimal(12, 2)
+  Quotation_Status quotation_status  @default(Pending)
+  salesOrder       SalesOrder        @relation(fields: [Sales_Order_ID], references: [Sales_Order_ID], onDelete: Restrict)
+  quotationDetails QuotationDetail[]
+
+  @@map("QUOTATION")
+}
+
+model QuotationDetail {
+  Quotation_Detail_ID String      @id @db.VarChar(8)
+  Quotation_ID        String      @db.VarChar(8)
+  Product_ID          String      @unique @db.VarChar(8)
+  Unit_Price          Decimal     @db.Decimal(10, 2)
+  Quantity            Int
+  Total_Price         Decimal     @db.Decimal(12, 2)
+  quotation           Quotation   @relation(fields: [Quotation_ID], references: [Quotation_ID], onDelete: Cascade)
+  orderDetail         OrderDetail @relation(fields: [Product_ID], references: [Product_ID], onDelete: Restrict)
+
+  @@map("QUOTATION_DETAIL")
+}
+
+model PrintJob {
+  Print_Job_ID            String            @id @db.VarChar(8)
+  Product_ID              String            @unique @db.VarChar(8)
+  Prototype_Status        prototype_status  @default(Not_Started)
+  Prototype_Approved_Date DateTime?         @db.Date
+  Print_Job_Status        print_job_status  @default(In_Design)
+  Plate_ID                String?           @db.VarChar(50)
+  orderDetail             OrderDetail       @relation(fields: [Product_ID], references: [Product_ID], onDelete: Restrict)
+  productionBatches       ProductionBatch[]
+
+  @@unique([Print_Job_ID, Product_ID])
+  @@map("PRINT_JOB")
+}
+
+model ProductionBatch {
+  Batch_ID            String             @id @db.VarChar(8)
+  Print_Job_ID        String             @db.VarChar(8)
+  Batch_Cycle         Int                @default(1)
+  Batch_Status        String             @default("Open") @db.VarChar(10)
+  Target_Quantity     Int
+  Produced_Quantity   Int                @default(0)
+  Close_Type          String?            @db.VarChar(10)
+  Closed_Reason       String?            @db.Text
+  Closed_By           String?            @db.VarChar(50)
+  Closed_At           DateTime?          @db.Timestamptz
+  printJob            PrintJob           @relation(fields: [Print_Job_ID], references: [Print_Job_ID], onDelete: Restrict)
+  productionRecords   ProductionRecord[]
+  qcRecords           QCRecord[]
+
+  @@unique([Print_Job_ID, Batch_Cycle])
+  @@unique([Batch_ID, Print_Job_ID])
+  @@unique([Batch_ID, Print_Job_ID, Batch_Cycle])
+  @@map("PRODUCTION_BATCH")
+}
+
+model ProductionRecord {
+  Production_Record_ID String          @id @db.VarChar(8)
+  Batch_ID             String          @db.VarChar(8)
+  Production_Date      DateTime        @default(now()) @db.Date
+  Quantity_Produced    Int
+  productionBatch      ProductionBatch @relation(fields: [Batch_ID], references: [Batch_ID], onDelete: Restrict)
+  qcRecords            QCRecord[]
+
+  @@unique([Production_Record_ID, Batch_ID])
+  @@map("PRODUCTION_RECORD")
+}
+
+model QCRecord {
+  QC_Record_ID         String           @id @db.VarChar(8)
+  Batch_ID             String           @db.VarChar(8)
+  Production_Record_ID String           @db.VarChar(8)
+  QC_Date              DateTime         @default(now()) @db.Date
+  Quantity_Passed      Int
+  Quantity_Failed      Int
+  productionBatch      ProductionBatch  @relation(fields: [Batch_ID], references: [Batch_ID], onDelete: Restrict)
+  productionRecord     ProductionRecord @relation(fields: [Production_Record_ID, Batch_ID], references: [Production_Record_ID, Batch_ID], onDelete: Restrict)
+
+  @@unique([QC_Record_ID, Batch_ID, Production_Record_ID])
+  @@map("QC_RECORD")
+}
+
+model Delivery {
+  Delivery_ID     String          @id @db.VarChar(8)
+  Delivery_Status delivery_status @default(Producing)
+  Delivery_Date   DateTime?       @db.Date
+  Deliver         String?         @db.VarChar(50)
+  Sales_Order_ID  String          @unique @db.VarChar(8)
+  salesOrder      SalesOrder      @relation(fields: [Sales_Order_ID], references: [Sales_Order_ID], onDelete: Restrict)
+
+  @@map("DELIVERY")
+}
+
+model Receipt {
+  Receipt_ID       String     @id @db.VarChar(8)
+  Receipt_Date     DateTime?  @db.Date
+  Payment_Receiver String?    @db.VarChar(50)
+  Sales_Order_ID   String     @unique @db.VarChar(8)
+  salesOrder       SalesOrder @relation(fields: [Sales_Order_ID], references: [Sales_Order_ID], onDelete: Restrict)
+
+  @@map("RECEIPT")
+}
+
+// ============================================================================
+// 3. IDEMPOTENCY AUDIT LOG ENTITIES (3 Tables)
+// ============================================================================
+
+model UC11IdempotencyLog {
+  Log_ID               BigInt     @id @default(autoincrement())
+  Idempotency_Key      String     @unique @db.VarChar(64)
+  Sales_Order_ID       String     @db.VarChar(8)
+  Print_Job_ID         String     @db.VarChar(8)
+  Batch_ID             String     @db.VarChar(8)
+  Production_Record_ID String     @unique @db.VarChar(8)
+  Quantity_Produced    Int
+  Request_Payload_Hash String     @db.VarChar(64)
+  Response_Status_Code Int        @default(200) @db.SmallInt
+  Response_Payload     Json
+  Created_At           DateTime   @default(now()) @db.Timestamptz
+  salesOrder           SalesOrder @relation(fields: [Sales_Order_ID], references: [Sales_Order_ID], onDelete: Restrict)
+
+  @@map("UC11_IDEMPOTENCY_LOG")
+}
+
+model UC12IdempotencyLog {
+  Log_ID               BigInt     @id @default(autoincrement())
+  Idempotency_Key      String     @unique @db.VarChar(64)
+  Sales_Order_ID       String     @db.VarChar(8)
+  Print_Job_ID         String     @db.VarChar(8)
+  Batch_ID             String     @db.VarChar(8)
+  Production_Record_ID String     @db.VarChar(8)
+  QC_Record_ID         String     @unique @db.VarChar(8)
+  Quantity_Passed      Int
+  Quantity_Failed      Int
+  Request_Payload_Hash String     @db.VarChar(64)
+  Response_Status_Code Int        @default(200) @db.SmallInt
+  Response_Payload     Json
+  Created_At           DateTime   @default(now()) @db.Timestamptz
+  salesOrder           SalesOrder @relation(fields: [Sales_Order_ID], references: [Sales_Order_ID], onDelete: Restrict)
+
+  @@map("UC12_IDEMPOTENCY_LOG")
+}
+
+model UC13IdempotencyLog {
+  Log_ID                 BigInt     @id @default(autoincrement())
+  Idempotency_Key        String     @unique @db.VarChar(64)
+  Sales_Order_ID         String     @db.VarChar(8)
+  Print_Job_ID           String     @db.VarChar(8)
+  Product_ID             String     @db.VarChar(8)
+  Batch_ID               String     @db.VarChar(8)
+  Production_Batch_Cycle Int
+  Reorder_Quantity       Int
+  Reason                 String     @db.Text
+  Request_Payload_Hash   String     @db.VarChar(64)
+  Response_Status_Code   Int        @default(200) @db.SmallInt
+  Response_Payload       Json
+  Created_At             DateTime   @default(now()) @db.Timestamptz
+  salesOrder             SalesOrder @relation(fields: [Sales_Order_ID], references: [Sales_Order_ID], onDelete: Restrict)
+
+  @@map("UC13_IDEMPOTENCY_LOG")
+}
